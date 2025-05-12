@@ -54,6 +54,7 @@ func main() {
 	bankController := controllers.NewBankController(db, emailService)
 	creditController := controllers.NewCreditController(db, emailService)
 
+	router.Use(middleware.LoggingMiddleware)
 	// Публичные маршруты для аутентификации
 	router.HandleFunc("/api/auth/signUp", authController.SignUp).Methods("POST")
 	router.HandleFunc("/api/auth/signIn", authController.SignIn).Methods("POST")
@@ -61,7 +62,6 @@ func main() {
 	// Защищенные маршруты
 	protected := router.PathPrefix("/api").Subrouter()
 	protected.Use(middleware.AuthMiddleware([]byte(authController.GetJWTKey())))
-	protected.Use(middleware.LoggingMiddleware)
 
 	// Маршруты для работы с банковскими счетами
 	protected.HandleFunc("/bank/accounts", bankController.CreateBankAccount).Methods("POST")
