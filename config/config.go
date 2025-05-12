@@ -6,7 +6,6 @@ import (
 	"strconv"
 )
 
-// Config представляет конфигурацию приложения
 type Config struct {
 	Server struct {
 		Port int
@@ -34,11 +33,9 @@ type Config struct {
 	CardHMACKey    string // Ключ для HMAC-подписи карт
 }
 
-// NewConfig создает новый экземпляр конфигурации
 func NewConfig() (*Config, error) {
 	cfg := &Config{}
 
-	// Настройки сервера
 	port, err := strconv.Atoi(getEnv("SERVER_PORT", "8080"))
 	if err != nil {
 		return nil, fmt.Errorf("неверный формат порта сервера: %v", err)
@@ -54,7 +51,7 @@ func NewConfig() (*Config, error) {
 	cfg.DB.Port = dbPort
 	cfg.DB.User = getEnv("DB_USER", "postgres")
 	cfg.DB.Password = getEnv("DB_PASSWORD", "postgres")
-	cfg.DB.DBName = getEnv("DB_NAME", "bank_db")
+	cfg.DB.DBName = getEnv("DB_NAME", "go_test")
 
 	// Настройки JWT
 	cfg.JWT.SecretKey = getEnv("JWT_SECRET_KEY", "your-secret-key-here")

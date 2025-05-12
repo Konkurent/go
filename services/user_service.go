@@ -37,9 +37,7 @@ func NewUserService(db *database.Database) *UserService {
 	return &UserService{db: db}
 }
 
-// CreateUserInternal создает нового пользователя
 func (h *UserService) CreateUserInternal(req CreateUserRequest) (*models.User, error) {
-	// Проверяем, существует ли пользователь с таким email
 	var existingUser models.User
 	if err := h.db.DB.Where("LOWER(email) = LOWER(?)", req.Email).First(&existingUser).Error; err == nil {
 		return nil, errors.New("user with this email already exists")
@@ -47,13 +45,11 @@ func (h *UserService) CreateUserInternal(req CreateUserRequest) (*models.User, e
 		return nil, err
 	}
 
-	// Хешируем пароль
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}
 
-	// Создаем нового пользователя
 	user := &models.User{
 		FirstName: req.FirstName,
 		LastName:  req.LastName,
@@ -68,7 +64,6 @@ func (h *UserService) CreateUserInternal(req CreateUserRequest) (*models.User, e
 	return user, nil
 }
 
-// findById ищет пользователя по ID
 func (h *UserService) findById(id uint) (*models.User, error) {
 	var user models.User
 	if err := h.db.DB.First(&user, id).Error; err != nil {
@@ -80,7 +75,6 @@ func (h *UserService) findById(id uint) (*models.User, error) {
 	return &user, nil
 }
 
-// getById ищет пользователя по ID, возвращает nil если не найден
 func (h *UserService) getById(id uint) (*models.User, error) {
 	var user models.User
 	if err := h.db.DB.First(&user, id).Error; err != nil {
@@ -92,7 +86,6 @@ func (h *UserService) getById(id uint) (*models.User, error) {
 	return &user, nil
 }
 
-// FindByEmail ищет пользователя по email (игнорируя регистр и пробелы)
 func (h *UserService) FindByEmail(email string) (*models.User, error) {
 	var user models.User
 	if err := h.db.DB.Where("LOWER(TRIM(email)) = LOWER(TRIM(?))", email).First(&user).Error; err != nil {

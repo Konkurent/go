@@ -167,7 +167,7 @@ func (s *CreditService) Create(dto CreateCreditDTO) (*CreditResponseDTO, error) 
 
 	// Проверяем существование счета
 	var account models.BankAccount
-	if err := tx.First(&account, dto.AccountID).Error; err != nil {
+	if err := tx.Preload("Holder").First(&account, dto.AccountID).Error; err != nil {
 		tx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("банковский счет не найден")
@@ -261,25 +261,36 @@ func (s *CreditService) Create(dto CreateCreditDTO) (*CreditResponseDTO, error) 
 		StartDate: credit.StartDate,
 		EndDate:   credit.EndDate,
 		Payments:  paymentDTOs,
+		User: UserDTO{
+			ID:        account.Holder.ID,
+			FirstName: account.Holder.FirstName,
+			LastName:  account.Holder.LastName,
+			Email:     account.Holder.Email,
+		},
+		Account: BankAccountDTO{
+			ID:      account.ID,
+			Number:  account.Number,
+			Balance: account.Balance,
+			Holder: UserDTO{
+				ID: account.HolderID,
+			},
+		},
 	}
 
 	return response, nil
 }
 
-// GetCreditsByUserID возвращает список кредитов пользователя
+// GetCreditsByUserID возвращает все кредиты пользователя
 func (s *CreditService) GetCreditsByUserID(userID uint) ([]models.Credit, error) {
 	var credits []models.Credit
-
-	// Получаем все кредиты пользователя с предзагрузкой связанных данных
 	if err := s.db.Where("user_id = ?", userID).
-		Preload("User").
-		Preload("Account").
-		Preload("Payments").
-		Order("created_at DESC").
+		Preload("Account.Holder").
+		Preload("Payments", func(db *gorm.DB) *gorm.DB {
+			return db.Order("payments.created_at DESC")
+		}).
 		Find(&credits).Error; err != nil {
-		return nil, errors.New("ошибка при получении списка кредитов")
+		return nil, err
 	}
-
 	return credits, nil
 }
 
@@ -296,6 +307,7 @@ func (s *CreditService) calculateNextPayment(credit models.Credit) *models.Payme
 	// Находим последний платеж
 	var lastPayment models.Payment
 	if err := s.db.Where("credit_id = ?", credit.ID).
+		Preload("Credit").
 		Order("created_at DESC").
 		First(&lastPayment).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
@@ -321,74 +333,31 @@ func (s *CreditService) calculateNextPayment(credit models.Credit) *models.Payme
 	}
 }
 
-// GetCreditByID возвращает информацию о кредите по ID
-func (s *CreditService) GetCreditByID(creditID uint) (*CreditResponseDTO, error) {
+// GetCreditByID возвращает кредит по ID
+func (s *CreditService) GetCreditByID(id uint) (*models.Credit, error) {
 	var credit models.Credit
+	if err := s.db.Preload("Account.Holder").
+		Preload("Payments", func(db *gorm.DB) *gorm.DB {
+			return db.Order("payments.created_at DESC")
+		}).
+		First(&credit, id).Error; err != nil {
+		return nil, err
+	}
+	return &credit, nil
+}
 
-	// Получаем кредит с предзагрузкой связанных данных
-	if err := s.db.
-		Preload("Account").
+// GetCreditsByAccountID возвращает все кредиты по ID счета
+func (s *CreditService) GetCreditsByAccountID(accountID uint) ([]models.Credit, error) {
+	var credits []models.Credit
+	if err := s.db.Where("account_id = ?", accountID).
 		Preload("Account.Holder").
 		Preload("Payments", func(db *gorm.DB) *gorm.DB {
-			return db.Order("pay_date ASC")
+			return db.Order("payments.created_at DESC")
 		}).
-		First(&credit, creditID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("кредит не найден")
-		}
-		return nil, errors.New("ошибка при получении информации о кредите")
+		Find(&credits).Error; err != nil {
+		return nil, err
 	}
-
-	// Конвертируем платежи в DTO
-	paymentDTOs := make([]PaymentDTO, len(credit.Payments))
-	for i, payment := range credit.Payments {
-		paymentDTOs[i] = s.toPaymentDTO(payment)
-	}
-
-	// Вычисляем оставшуюся сумму
-	remainingAmount := credit.Amount
-	for _, payment := range credit.Payments {
-		if payment.Status == models.PaymentStatusPaid {
-			remainingAmount -= payment.Amount
-		}
-	}
-
-	// Формируем ответ
-	response := &CreditResponseDTO{
-		ID:              credit.ID,
-		Rate:            credit.Rate,
-		Amount:          credit.Amount,
-		RemainingAmount: remainingAmount,
-		Status:          string(credit.Status),
-		StartDate:       credit.StartDate,
-		EndDate:         credit.EndDate,
-		Payments:        paymentDTOs,
-		User: UserDTO{
-			ID:        credit.Account.Holder.ID,
-			FirstName: credit.Account.Holder.FirstName,
-			LastName:  credit.Account.Holder.LastName,
-			Email:     credit.Account.Holder.Email,
-		},
-		Account: BankAccountDTO{
-			ID:      credit.Account.ID,
-			Number:  credit.Account.Number,
-			Balance: credit.Account.Balance,
-			Holder: UserDTO{
-				ID: credit.Account.HolderID,
-			},
-		},
-	}
-
-	// Если кредит активен, вычисляем следующий платеж
-	if credit.Status == models.CreditStatusActive {
-		nextPayment := s.calculateNextPayment(credit)
-		if nextPayment != nil {
-			paymentDTO := s.toPaymentDTO(*nextPayment)
-			response.NextPayment = &paymentDTO
-		}
-	}
-
-	return response, nil
+	return credits, nil
 }
 
 // PayCredit обрабатывает платеж по кредиту
@@ -443,7 +412,7 @@ func (s *CreditService) PayCredit(dto PayCreditDTO) (*PaymentDTO, error) {
 
 	// Получаем счет
 	var account models.BankAccount
-	if err := tx.First(&account, dto.AccountID).Error; err != nil {
+	if err := tx.Preload("Holder").First(&account, dto.AccountID).Error; err != nil {
 		tx.Rollback()
 		return nil, errors.New("счет не найден")
 	}
@@ -457,6 +426,7 @@ func (s *CreditService) PayCredit(dto PayCreditDTO) (*PaymentDTO, error) {
 	// Находим следующий платеж
 	var nextPayment models.Payment
 	if err := tx.Where("credit_id = ? AND status = ?", dto.CreditID, models.PaymentStatusPlanned).
+		Preload("Credit").
 		Order("pay_date ASC").
 		First(&nextPayment).Error; err != nil {
 		tx.Rollback()

@@ -19,16 +19,19 @@ import (
 
 // CardDTO представляет данные для создания карты
 type CardDTO struct {
-	AccountID uint `json:"account_id"`
-	UserID    uint `json:"user_id"`
+	UserID     uint   `json:"user_id" validate:"required"`
+	AccountID  uint   `json:"account_id" validate:"required"`
+	Number     string `json:"number" validate:"required,len=16"`
+	CVV        string `json:"cvv" validate:"required,len=3"`
+	Expiration string `json:"expiration" validate:"required,len=5"`
 }
 
 // CardResponseDTO представляет данные карты для ответа
 type CardResponseDTO struct {
 	ID         uint   `json:"id"`
 	Number     string `json:"number"`
-	Holder     string `json:"holder"`
 	CVV        string `json:"cvv"`
+	Holder     string `json:"holder"`
 	Expiration string `json:"expiration"`
 	AccountID  uint   `json:"account_id"`
 	CreatedAt  string `json:"created_at"`
@@ -60,35 +63,29 @@ func NewCardService(db *gorm.DB, bankService *BankService, userService *UserServ
 
 // CreateCard создает новую карту
 func (s *CardService) CreateCard(dto CardDTO) (*CardResponseDTO, error) {
-	// Проверяем существование аккаунта
 	account, err := s.bankService.GetById(dto.AccountID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Проверяем принадлежность аккаунта пользователю
 	if account.HolderID != dto.UserID {
 		return nil, errors.New("банковский счет не принадлежит пользователю")
 	}
 
-	// Генерируем номер карты
 	cardNumber := s.generateCardNumber()
 
 	if s.validateLuhn(cardNumber) {
 		return nil, errors.New("Номер карты не проходит проверку по алгоритму Луна")
 	}
 
-	// Генерируем дату истечения
 	expirationDate := calculateExpirationDate()
 	expirationStr := expirationDate.Format("01/06")
 
-	// Генерируем cvv
 	hashedCVV, error := s.hashCVV(s.generateCVV())
 	if error != nil {
 		return nil, err
 	}
 
-	// Шифруем данные
 	encryptedNumber, err := s.encryptData(cardNumber)
 	if err != nil {
 		return nil, errors.New("не удалось зашифровать номер карты")
@@ -99,7 +96,6 @@ func (s *CardService) CreateCard(dto CardDTO) (*CardResponseDTO, error) {
 		return nil, errors.New("не удалось зашифровать дату истечения")
 	}
 
-	// Создаем карту
 	card := &models.Card{
 		NumberEncrypted:     encryptedNumber,
 		NumberHMAC:          s.calculateHMAC(cardNumber),
@@ -109,41 +105,34 @@ func (s *CardService) CreateCard(dto CardDTO) (*CardResponseDTO, error) {
 		AccountID:           dto.AccountID,
 	}
 
-	// Сохраняем карту
 	if err := s.db.Create(card).Error; err != nil {
 		return nil, errors.New("не удалось создать карту")
 	}
 
-	// Преобразуем в DTO для ответа
 	return s.cardToResponseDTO(card)
 }
 
 // GetAllByUserID возвращает все карты пользователя
 func (s *CardService) GetAllByUserID(userID uint) ([]CardResponseDTO, error) {
-	// Получаем все аккаунты пользователя
 	accounts, err := s.bankService.GetAllByUserId(userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Получаем ID всех аккаунтов
 	var accountIDs []uint
 	for _, account := range accounts {
 		accountIDs = append(accountIDs, account.ID)
 	}
 
-	// Если у пользователя нет счетов, возвращаем пустой список
 	if len(accountIDs) == 0 {
 		return []CardResponseDTO{}, nil
 	}
 
-	// Получаем все карты пользователя
 	var cards []models.Card
 	if err := s.db.Where("account_id IN ?", accountIDs).Find(&cards).Error; err != nil {
 		return nil, errors.New("не удалось получить карты")
 	}
 
-	// Преобразуем в DTO для ответа
 	var response []CardResponseDTO
 	for _, card := range cards {
 		dto, err := s.cardToResponseDTO(&card)
@@ -159,13 +148,11 @@ func (s *CardService) GetAllByUserID(userID uint) ([]CardResponseDTO, error) {
 // Вспомогательные методы
 
 func (s *CardService) cardToResponseDTO(card *models.Card) (*CardResponseDTO, error) {
-	// Расшифровываем номер карты
 	number, err := s.decryptData(card.NumberEncrypted)
 	if err != nil {
 		return nil, errors.New("не удалось расшифровать номер карты")
 	}
 
-	// Расшифровываем дату истечения
 	expiration, err := s.decryptData(card.ExpirationEncrypted)
 	if err != nil {
 		return nil, errors.New("не удалось расшифровать дату истечения")
@@ -174,7 +161,7 @@ func (s *CardService) cardToResponseDTO(card *models.Card) (*CardResponseDTO, er
 	return &CardResponseDTO{
 		ID:         card.ID,
 		Number:     maskCardNumber(number),
-		CVV:        "***", // Маскируем CVV
+		CVV:        "***",
 		Holder:     card.Account.Holder.LastName + " " + card.Account.Holder.FirstName,
 		Expiration: expiration,
 		AccountID:  card.AccountID,
@@ -185,20 +172,17 @@ func (s *CardService) cardToResponseDTO(card *models.Card) (*CardResponseDTO, er
 
 // decryptData расшифровывает данные с помощью PGP
 func (s *CardService) decryptData(encryptedData string) (string, error) {
-	// Загружаем приватный ключ
 	entityList, err := openpgp.ReadArmoredKeyRing(strings.NewReader(s.config.CardPrivateKey))
 	if err != nil {
 		return "", err
 	}
 
-	// Создаем буфер для расшифрованных данных
 	buf := strings.NewReader(encryptedData)
 	md, err := openpgp.ReadMessage(buf, entityList, nil, &packet.Config{})
 	if err != nil {
 		return "", err
 	}
 
-	// Читаем расшифрованные данные
 	decrypted, err := io.ReadAll(md.UnverifiedBody)
 	if err != nil {
 		return "", err
